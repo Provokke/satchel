@@ -73,10 +73,10 @@ local function update(
 	key: string,
 	transform: (stored: any) -> (any, string)
 ): (boolean, string?, any)
-	waitForBudget(deps)
 	local outcome: string? = nil
 	local produced: any = nil
 	local ok, err = pcall(function()
+		waitForBudget(deps) -- inside the pcall: a budget reading that throws is a failed call
 		return deps.dataStore:UpdateAsync(key, function(stored: any)
 			local record, result = transform(stored)
 			outcome = result
@@ -91,11 +91,48 @@ local function update(
 	return true, outcome, produced
 end
 
+-- Hands the lease on `key` back for `owner`. With `payload`, its result is written as the final
+-- data; without it the stored data is kept. Retries with doubling waits, capped at 30 s, until
+-- the write lands or turns out to be lost, or until the next wait would take the total past
+-- `waitLimit` seconds. Returns "released", "lost" or "error".
+local RELEASE_WAIT_CAP = 30
+local QUICK_RELEASE_WAIT = 3 -- seconds of retries when handing back a lease from a failed load
+
+local function releaseLease(deps: Deps, key: string, owner: string, payload: (() -> Data)?, waitLimit: number): string
+	local waited = 0
+	local attempt = 0
+	while true do
+		attempt += 1
+		local ok, outcome = update(deps, key, function(current: any)
+			local writeData = payload ~= nil
+			local data = if payload then payload() else {}
+			local record, result = deps.lease.release(current, owner, deps.clock(), data, writeData)
+			if record ~= nil and writeData then
+				record.schema = deps.schema
+			end
+			return record, result
+		end)
+		if ok and outcome ~= nil then
+			return outcome
+		end
+		local delay = math.min(deps.retryBase * 2 ^ (attempt - 1), RELEASE_WAIT_CAP)
+		if waited + delay > waitLimit then
+			return "error"
+		end
+		deps.wait(delay)
+		waited += delay
+	end
+end
+
 function Store.new(deps: Deps): Store
 	return setmetatable({ deps = deps }, Store)
 end
 
-function Store.load(self: Store, key: string): (Session?, string)
+-- Claims `key` and opens it as a session. Returns the session and "new", "taken" or "stolen";
+-- or nil and "locked" (another session holds it), "error" (the DataStore failed, or the record
+-- couldn't be opened) or "cancelled" (keepTrying said stop between attempts, for example
+-- because the player left).
+function Store.load(self: Store, key: string, keepTrying: (() -> boolean)?): (Session?, string)
 	local deps = self.deps
 	local encode = deps.encode
 	local decode = deps.decode
@@ -112,17 +149,39 @@ function Store.load(self: Store, key: string): (Session?, string)
 	local owner = deps.jobId .. ":" .. deps.nonce()
 	local lastFailure = "error"
 	for attempt = 1, deps.retries do
+		if attempt > 1 then
+			if keepTrying ~= nil and not keepTrying() then
+				return nil, "cancelled"
+			end
+			deps.wait(deps.retryBase * 2 ^ (attempt - 2))
+			if keepTrying ~= nil and not keepTrying() then
+				return nil, "cancelled"
+			end
+		end
 		local ok, outcome, record = update(deps, key, function(stored: any)
-			local claimed, result =
-				deps.lease.claim(stored, owner, deps.clock(), deps.leaseSeconds, freshData)
+			local claimed, result = deps.lease.claim(stored, owner, deps.clock(), deps.leaseSeconds, freshData)
 			if claimed ~= nil and result == "new" then
 				claimed.schema = deps.schema
 			end
 			return claimed, result
 		end)
 		if ok and outcome ~= "held" and record ~= nil then
-			local saved, readOnly = deps.migrations.run(record, deps.steps, deps.schema)
-			local data = if decode then decode(saved) else saved
+			-- The lease is ours from here on. If the record can't be opened (a missing migration
+			-- step, a step that errors, data that won't decode), hand the lease straight back
+			-- without touching the stored data, so the record isn't locked for the lease length.
+			local opened, data, readOnly = pcall(function(): (Data, boolean)
+				local saved, future = deps.migrations.run(record, deps.steps, deps.schema)
+				local decoded = if decode then decode(saved) else saved
+				if type(decoded) ~= "table" then
+					error("saved data is not a table")
+				end
+				return decoded, future
+			end)
+			if not opened then
+				deps.log(`could not open {key}: {tostring(data)}`)
+				releaseLease(deps, key, owner, nil, QUICK_RELEASE_WAIT)
+				return nil, "error"
+			end
 			local session = setmetatable({
 				key = key,
 				owner = owner,
@@ -137,7 +196,11 @@ function Store.load(self: Store, key: string): (Session?, string)
 			return session, outcome :: string
 		end
 		lastFailure = if ok then "locked" else "error"
-		deps.wait(deps.retryBase * 2 ^ (attempt - 1))
+	end
+	if lastFailure == "error" then
+		-- The last attempt may have landed before the call failed. Clearing the lease costs one
+		-- call and saves the player a lockout for the lease length.
+		releaseLease(deps, key, owner, nil, 0)
 	end
 	return nil, lastFailure
 end
@@ -215,38 +278,6 @@ function Session.save(self: Session): boolean
 		end
 		return true
 	end)
-end
-
--- Hands the lease on `key` back for `owner`. With `payload`, its result is written as the final
--- data; without it the stored data is kept. Retries with doubling waits, capped at 30 s, until
--- the write lands or turns out to be lost, or until the next wait would take the total past
--- `waitLimit` seconds. Returns "released", "lost" or "error".
-local RELEASE_WAIT_CAP = 30
-
-local function releaseLease(deps: Deps, key: string, owner: string, payload: (() -> Data)?, waitLimit: number): string
-	local waited = 0
-	local attempt = 0
-	while true do
-		attempt += 1
-		local ok, outcome = update(deps, key, function(current: any)
-			local writeData = payload ~= nil
-			local data = if payload then payload() else {}
-			local record, result = deps.lease.release(current, owner, deps.clock(), data, writeData)
-			if record ~= nil and writeData then
-				record.schema = deps.schema
-			end
-			return record, result
-		end)
-		if ok and outcome ~= nil then
-			return outcome
-		end
-		local delay = math.min(deps.retryBase * 2 ^ (attempt - 1), RELEASE_WAIT_CAP)
-		if waited + delay > waitLimit then
-			return "error"
-		end
-		deps.wait(delay)
-		waited += delay
-	end
 end
 
 -- Final write and lease hand-back. A player's last minute of play is only safe once this lands,

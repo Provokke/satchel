@@ -53,4 +53,25 @@ return {
 			assert(Deep.equal(record, snapshot), "input record changed")
 		end,
 	},
+	{
+		name = "a missing step raises an error that names the schema",
+		run = function()
+			local ok, err = pcall(function()
+				Migrations.run({ schema = 1, data = {}, savedAt = 0 }, {}, 3)
+			end)
+			assert(not ok and string.find(tostring(err), "schema 1", 1, true), tostring(err))
+			-- control
+			local data = Migrations.run({ schema = 1, data = {}, savedAt = 0 }, {
+				function(d: any)
+					d.a = 1
+					return d
+				end,
+				function(d: any)
+					d.b = 2
+					return d
+				end,
+			}, 3)
+			assert(data.a == 1 and data.b == 2)
+		end,
+	},
 }

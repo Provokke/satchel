@@ -35,7 +35,7 @@ return {
 			assert(a ~= nil)
 			local b, outcome = storeB:load("p1")
 			assert(b == nil and outcome == "locked", outcome)
-			assert(#waitsB == 2 and waitsB[1] == 1 and waitsB[2] == 2, "waits should be 1 then 2")
+			assert(#waitsB == 1 and waitsB[1] == 1, "one wait between the two attempts, none after the last")
 			assert(a:release() == true)
 			local b2, outcome2 = storeB:load("p1")
 			assert(b2 ~= nil and outcome2 == "taken", outcome2)
@@ -75,13 +75,14 @@ return {
 		end,
 	},
 	{
-		name = "a persistent failure gives error after exactly the retry count",
+		name = "a persistent failure gives error after the retry count and one lease hand-back",
 		run = function()
 			local store, ds = server({}, FakeClock.new(0), "A", { retries = 3 })
 			ds:failNext(100, "502 service unavailable")
 			local session, outcome = store:load("p1")
 			assert(session == nil and outcome == "error", outcome)
-			assert(ds.calls == 3, `expected 3 calls, got {ds.calls}`)
+			-- three claims, then one release in case the last claim landed before it failed
+			assert(ds.calls == 4, `expected 4 calls, got {ds.calls}`)
 		end,
 	},
 	{

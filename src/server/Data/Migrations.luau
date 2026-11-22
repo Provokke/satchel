@@ -27,7 +27,11 @@ function Migrations.run(
 		return data, true
 	end
 	for version = math.max(record.schema, 1), current - 1 do
-		data = steps[version](data)
+		local step = steps[version]
+		if step == nil then
+			error(`no migration step from schema {version} to {version + 1}`)
+		end
+		data = step(data)
 	end
 	return data, false
 end
