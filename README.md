@@ -2,9 +2,9 @@
 
 # satchel
 
-Session-locked player data, stacking inventory, equip slots and safe two-player trading for Roblox. It leaves out shops, crafting, item art and any purchase flow.
+Session-locked player data, stacking inventory, equip slots and all-or-nothing two-player trading for Roblox. It leaves out shops, crafting, item art and any purchase flow.
 
-![License](https://img.shields.io/badge/LICENSE-MIT-blue?style=for-the-badge)  ![Language](https://img.shields.io/badge/LUAU-00A2FF?style=for-the-badge&logo=roblox&logoColor=white)  ![Tests](https://img.shields.io/badge/TESTS-140-brightgreen?style=for-the-badge)
+![Licence](https://img.shields.io/badge/LICENSE-MIT-blue?style=for-the-badge)  ![Language](https://img.shields.io/badge/LUAU-00A2FF?style=for-the-badge&logo=roblox&logoColor=white)  ![Tests](https://img.shields.io/badge/TESTS-140-brightgreen?style=for-the-badge)
 
 Refer to [LICENSE](LICENSE) for the legal bits.
 
@@ -115,7 +115,7 @@ The entry scripts and the UI can't run under Lune. They build with Rojo and are 
 
 ## ⚠️ Honest limits
 
-- A trade writes two DataStore keys, and that isn't atomic. Each trade saves both players straight after the commit, and an older autosave can't overwrite those saves, but a server crash between the two saves can still lose or duplicate the traded items.
+- The commit is all-or-nothing in memory, but a trade writes two DataStore keys, and that isn't atomic. Each trade saves both players straight after the commit, and an older autosave can't overwrite those saves, but a server crash between the two saves can still lose or duplicate the traded items.
 - If the DataStore stays down for longer than the lease (3 minutes by default) after a player leaves, the release gives up and whatever they did since the last successful save is lost. Until the release lands or the lease runs out, a rejoin on another server is turned away with "rejoin in a minute".
 - During a rolling update, a player whose record was saved by the newer version can only look at their bag on an older server. They have to rejoin a newer server to change it or trade.
 - A release that landed but whose call errored is recognised when it retries. If another server has claimed and released the record in between, it is logged as lost even though the data was written.

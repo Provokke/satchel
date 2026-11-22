@@ -5,7 +5,7 @@ return table.freeze({
 	AutosaveSeconds = 60, -- how often each session is written
 	LeaseSeconds = 180, -- must be well over AutosaveSeconds, or a busy server loses its own lock
 	LoadRetries = 5, -- attempts to load a profile before giving up
-	RetryBaseSeconds = 1, -- doubles each retry: 1, 2, 4, 8, 16
+	RetryBaseSeconds = 1, -- doubles each retry: 1, 2, 4, 8 (five attempts, four waits)
 	CloseTimeoutSeconds = 25, -- BindToClose gets about 30 s in total, leave headroom
 	InventoryCapacity = 24, -- number of bag slots
 	EquipSlots = table.freeze({ "Head", "Body", "Weapon" }), -- named slots an item can be worn in
