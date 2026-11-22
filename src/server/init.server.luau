@@ -19,10 +19,11 @@ local Inventory = require(script.Inventory.Inventory)
 local Lease = require(script.Data.Lease)
 local MemoryStore = require(script.Data.MemoryStore)
 local Migrations = require(script.Data.Migrations)
+local Steps = require(script.Data.Steps)
 local Store = require(script.Data.Store)
 local Trade = require(script.Trade.Trade)
 
-local problems = ConfigCheck.check(Config)
+local problems = ConfigCheck.check(Config, Steps)
 if #problems > 0 then
 	for _, problem in problems do
 		warn("[Satchel] config problem: " .. problem)
@@ -65,7 +66,7 @@ local store = Store.new({
 	retries = Config.LoadRetries,
 	retryBase = Config.RetryBaseSeconds,
 	schema = Config.SchemaVersion,
-	steps = {},
+	steps = Steps,
 	defaultData = function()
 		return { inventory = Inventory.empty() }
 	end,

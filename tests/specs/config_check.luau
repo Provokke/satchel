@@ -1,10 +1,12 @@
 --!strict
 local Config = require("../../src/shared/Config")
 local ConfigCheck = require("../../src/shared/ConfigCheck")
+local Steps = require("../../src/server/Data/Steps")
 
 -- Builds a config the checks accept, then lets a test break one thing.
 local function good(): any
 	return {
+		SchemaVersion = 1,
 		AutosaveSeconds = 60,
 		LeaseSeconds = 180,
 		LoadRetries = 5,
@@ -31,16 +33,16 @@ end
 
 return {
 	{
-		name = "the shipped config has no problems",
+		name = "the shipped config and migration steps have no problems",
 		run = function()
-			local problems = ConfigCheck.check(Config)
+			local problems = ConfigCheck.check(Config, Steps)
 			assert(#problems == 0, table.concat(problems, "; "))
 		end,
 	},
 	{
 		name = "a good test config passes (negative control)",
 		run = function()
-			assert(#ConfigCheck.check(good()) == 0)
+			assert(#ConfigCheck.check(good(), {}) == 0)
 		end,
 	},
 	{
@@ -48,9 +50,9 @@ return {
 		run = function()
 			local c = good()
 			c.LeaseSeconds = 100
-			assert(hasProblem(ConfigCheck.check(c), "LeaseSeconds"))
+			assert(hasProblem(ConfigCheck.check(c, {}), "LeaseSeconds"))
 			c.LeaseSeconds = 120
-			assert(#ConfigCheck.check(c) == 0)
+			assert(#ConfigCheck.check(c, {}) == 0)
 		end,
 	},
 	{
@@ -58,9 +60,9 @@ return {
 		run = function()
 			local c = good()
 			c.LoadRetries = 0
-			assert(hasProblem(ConfigCheck.check(c), "LoadRetries"))
+			assert(hasProblem(ConfigCheck.check(c, {}), "LoadRetries"))
 			c.LoadRetries = 1
-			assert(#ConfigCheck.check(c) == 0)
+			assert(#ConfigCheck.check(c, {}) == 0)
 		end,
 	},
 	{
@@ -68,9 +70,9 @@ return {
 		run = function()
 			local c = good()
 			c.CloseTimeoutSeconds = 29
-			assert(hasProblem(ConfigCheck.check(c), "CloseTimeoutSeconds"))
+			assert(hasProblem(ConfigCheck.check(c, {}), "CloseTimeoutSeconds"))
 			c.CloseTimeoutSeconds = 28
-			assert(#ConfigCheck.check(c) == 0)
+			assert(#ConfigCheck.check(c, {}) == 0)
 		end,
 	},
 	{
@@ -78,11 +80,11 @@ return {
 		run = function()
 			local c = good()
 			c.Items.apple.maxStack = 0
-			assert(hasProblem(ConfigCheck.check(c), "maxStack"))
+			assert(hasProblem(ConfigCheck.check(c, {}), "maxStack"))
 			c.Items.apple.maxStack = 2.5
-			assert(hasProblem(ConfigCheck.check(c), "maxStack"))
+			assert(hasProblem(ConfigCheck.check(c, {}), "maxStack"))
 			c.Items.apple.maxStack = 1
-			assert(#ConfigCheck.check(c) == 0)
+			assert(#ConfigCheck.check(c, {}) == 0)
 		end,
 	},
 	{
@@ -90,9 +92,9 @@ return {
 		run = function()
 			local c = good()
 			c.Items.helm.slot = "Feet"
-			assert(hasProblem(ConfigCheck.check(c), "slot"))
+			assert(hasProblem(ConfigCheck.check(c, {}), "slot"))
 			c.Items.helm.slot = "Body"
-			assert(#ConfigCheck.check(c) == 0)
+			assert(#ConfigCheck.check(c, {}) == 0)
 		end,
 	},
 	{
@@ -100,9 +102,9 @@ return {
 		run = function()
 			local c = good()
 			c.StartingItems = { { id = "ghost", count = 1 } }
-			assert(hasProblem(ConfigCheck.check(c), "ghost"))
+			assert(hasProblem(ConfigCheck.check(c, {}), "ghost"))
 			c.StartingItems = { { id = "helm", count = 1 } }
-			assert(#ConfigCheck.check(c) == 0)
+			assert(#ConfigCheck.check(c, {}) == 0)
 		end,
 	},
 	{
@@ -110,11 +112,37 @@ return {
 		run = function()
 			local c = good()
 			c.Trade.MaxOfferSlots = 0
-			assert(hasProblem(ConfigCheck.check(c), "MaxOfferSlots"))
+			assert(hasProblem(ConfigCheck.check(c, {}), "MaxOfferSlots"))
 			c.Trade.MaxOfferSlots = 25
-			assert(hasProblem(ConfigCheck.check(c), "MaxOfferSlots"))
+			assert(hasProblem(ConfigCheck.check(c, {}), "MaxOfferSlots"))
 			c.Trade.MaxOfferSlots = 24
-			assert(#ConfigCheck.check(c) == 0)
+			assert(#ConfigCheck.check(c, {}) == 0)
+		end,
+	},
+	{
+		name = "migration steps that don't cover every schema bump are flagged",
+		run = function()
+			local function step(data: any)
+				return data
+			end
+			local c = good()
+			c.SchemaVersion = 3
+			assert(hasProblem(ConfigCheck.check(c, { step }), "migration step"))
+			assert(hasProblem(ConfigCheck.check(c, { step, step, step }), "migration step"))
+			assert(hasProblem(ConfigCheck.check(c, { step, true :: any }), "migration step"))
+			assert(#ConfigCheck.check(c, { step, step }) == 0)
+		end,
+	},
+	{
+		name = "a SchemaVersion that isn't a whole number of 1 or more is flagged",
+		run = function()
+			local c = good()
+			c.SchemaVersion = 0
+			assert(hasProblem(ConfigCheck.check(c, {}), "SchemaVersion"))
+			c.SchemaVersion = 1.5
+			assert(hasProblem(ConfigCheck.check(c, {}), "SchemaVersion"))
+			c.SchemaVersion = 1
+			assert(#ConfigCheck.check(c, {}) == 0)
 		end,
 	},
 }

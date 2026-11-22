@@ -1,11 +1,32 @@
 --!strict
--- Start-up sanity checks for Config. Returns a list of problems, empty when the config is fine.
+-- Start-up sanity checks for Config and the migration steps. Returns a list of problems, empty
+-- when everything is fine.
 local ConfigCheck = {}
 
-function ConfigCheck.check(config: any): { string }
+function ConfigCheck.check(config: any, steps: { any }): { string }
 	local problems: { string } = {}
 	local function add(message: string)
 		table.insert(problems, message)
+	end
+
+	local schema = config.SchemaVersion
+	if type(schema) ~= "number" or schema < 1 or schema % 1 ~= 0 then
+		add("SchemaVersion must be a whole number of 1 or more")
+	else
+		-- A missing step only shows up when an old record loads, so catch it at start-up instead.
+		local count = 0
+		for _ in steps do
+			count += 1
+		end
+		local allFunctions = true
+		for i = 1, schema - 1 do
+			if type(steps[i]) ~= "function" then
+				allFunctions = false
+			end
+		end
+		if count ~= schema - 1 or not allFunctions then
+			add(`SchemaVersion {schema} needs exactly {schema - 1} migration step(s), one per bump`)
+		end
 	end
 
 	if config.LeaseSeconds < 2 * config.AutosaveSeconds then
