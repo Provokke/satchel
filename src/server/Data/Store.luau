@@ -98,7 +98,13 @@ end
 local RELEASE_WAIT_CAP = 30
 local QUICK_RELEASE_WAIT = 3 -- seconds of retries when handing back a lease from a failed load
 
-local function releaseLease(deps: Deps, key: string, owner: string, payload: (() -> Data)?, waitLimit: number): string
+local function releaseLease(
+	deps: Deps,
+	key: string,
+	owner: string,
+	payload: (() -> Data)?,
+	waitLimit: number
+): string
 	local waited = 0
 	local attempt = 0
 	while true do
@@ -159,7 +165,8 @@ function Store.load(self: Store, key: string, keepTrying: (() -> boolean)?): (Se
 			end
 		end
 		local ok, outcome, record = update(deps, key, function(stored: any)
-			local claimed, result = deps.lease.claim(stored, owner, deps.clock(), deps.leaseSeconds, freshData)
+			local claimed, result =
+				deps.lease.claim(stored, owner, deps.clock(), deps.leaseSeconds, freshData)
 			if claimed ~= nil and result == "new" then
 				claimed.schema = deps.schema
 			end

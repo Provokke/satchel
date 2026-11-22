@@ -32,7 +32,13 @@ local function deepCopy(value: any): any
 end
 
 local function build(stored: Record, data: { [string]: any }, lease: LeaseInfo?, now: number): Record
-	return { schema = stored.schema, data = data, lease = lease, savedAt = now, releasedBy = stored.releasedBy }
+	return {
+		schema = stored.schema,
+		data = data,
+		lease = lease,
+		savedAt = now,
+		releasedBy = stored.releasedBy,
+	}
 end
 
 -- Load transform. Outcomes: "new", "taken" (no lease, or this session's own lease from an

@@ -342,7 +342,10 @@ return {
 			world.viewOnly[2] = true
 			clock:advance(3)
 			handlers:tick()
-			assert(Inventory.countOf(world.inv[1], "apple") == 10 and Inventory.countOf(world.inv[2], "apple") == 0)
+			assert(
+				Inventory.countOf(world.inv[1], "apple") == 10
+					and Inventory.countOf(world.inv[2], "apple") == 0
+			)
 			assert(#world.done == 0, "no saves for a trade that did not happen")
 			assert(handlers:view(1).trade == nil, "the trade has ended")
 			-- control
@@ -371,7 +374,10 @@ return {
 			world.inv[2] = nil -- their session is gone
 			clock:advance(5)
 			handlers:tick()
-			assert(Inventory.countOf(world.inv[1], "apple") == 10 and Inventory.countOf(world.inv[1], "coin") == 0)
+			assert(
+				Inventory.countOf(world.inv[1], "apple") == 10
+					and Inventory.countOf(world.inv[1], "coin") == 0
+			)
 			assert(#world.done == 0, "no saves")
 			assert(handlers:view(1).trade == nil)
 			-- control: staying through the countdown commits the same trade
@@ -383,7 +389,10 @@ return {
 			handlers2:handle(2, "tradeConfirm", true)
 			clock2:advance(6)
 			handlers2:tick()
-			assert(Inventory.countOf(world2.inv[1], "coin") == 10 and Inventory.countOf(world2.inv[2], "apple") == 4)
+			assert(
+				Inventory.countOf(world2.inv[1], "coin") == 10
+					and Inventory.countOf(world2.inv[2], "apple") == 4
+			)
 			assert(#world2.done == 1)
 		end,
 	},
