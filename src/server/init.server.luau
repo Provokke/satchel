@@ -20,6 +20,7 @@ local Lease = require(script.Data.Lease)
 local MemoryStore = require(script.Data.MemoryStore)
 local Migrations = require(script.Data.Migrations)
 local Profile = require(script.Data.Profile)
+local Sessions = require(script.Sessions)
 local Steps = require(script.Data.Steps)
 local Store = require(script.Data.Store)
 local Trade = require(script.Trade.Trade)
@@ -45,7 +46,9 @@ else
 	)
 end
 
-local jobId = if game.JobId ~= "" then game.JobId else "studio"
+-- Every Studio play test gets its own id, so a lease left behind by a crashed or parallel test
+-- reads as someone else's (and runs out) rather than as ours.
+local jobId = if game.JobId ~= "" then game.JobId else "studio-" .. HttpService:GenerateGUID(false)
 
 local profile = Profile.new({
 	inventory = Inventory,
@@ -61,6 +64,9 @@ local store = Store.new({
 	clock = os.time,
 	wait = task.wait,
 	budget = function(_kind: string): number
+		if not useRealStore then
+			return 100 -- the in-memory store has no request budget
+		end
 		return DataStoreService:GetRequestBudgetForRequestType(Enum.DataStoreRequestType.UpdateAsync)
 	end,
 	jobId = jobId,
@@ -85,39 +91,6 @@ local store = Store.new({
 	end,
 })
 
-local sessions: { [number]: any } = {}
-local releasing = 0
-
--- waitLimit is how long the release may spend retrying; nil means the store's default (the lease
--- length), which is right while the server is running.
-local function releaseSession(session: any, waitLimit: number?)
-	releasing += 1
-	task.spawn(function()
-		local ok, err = pcall(function()
-			session:release(waitLimit)
-		end)
-		if not ok then
-			warn("[Satchel] release failed: " .. tostring(err))
-		end
-		releasing -= 1
-	end)
-end
-
-local function liveInventory(userId: number): any
-	local session = sessions[userId]
-	if session == nil or session.lost then
-		return nil
-	end
-	return session.data.inventory
-end
-
--- A read-only or lost session can be looked at but must not change or trade: nothing it does
--- would be saved.
-local function writable(userId: number): boolean
-	local session = sessions[userId]
-	return session ~= nil and not session.lost and not session.readOnly
-end
-
 -- Remotes
 local remotes = Instance.new("Folder")
 remotes.Name = "SatchelRemotes"
@@ -128,6 +101,55 @@ local sync = Instance.new("RemoteEvent")
 sync.Name = "Sync"
 sync.Parent = remotes
 remotes.Parent = ReplicatedStorage
+
+-- Declared first: `ready` below needs it.
+local sessions: any
+sessions = Sessions.new({
+	store = store,
+	keyFor = function(userId: number): string
+		return "Player_" .. userId
+	end,
+	present = function(player: any): boolean
+		return player.Parent ~= nil
+	end,
+	kick = function(player: any, message: string)
+		player:Kick(message)
+	end,
+	playerOf = function(userId: number): any
+		return Players:GetPlayerByUserId(userId)
+	end,
+	ready = function(userId: number, session: any)
+		local player = Players:GetPlayerByUserId(userId)
+		if player then
+			sync:FireClient(player, {
+				inventory = Inventory.encode(session.data.inventory),
+				viewOnly = not sessions:writable(userId),
+			})
+		end
+	end,
+	spawn = function(fn: () -> ())
+		task.spawn(fn)
+	end,
+	wait = function(seconds: number)
+		task.wait(seconds)
+	end,
+	clock = os.clock,
+	closeSeconds = Config.CloseTimeoutSeconds,
+	log = function(message: string)
+		warn("[Satchel] " .. message)
+	end,
+})
+
+-- The live bag, or nil when the player has no session or it has lost its lease.
+local function liveInventory(userId: number): any
+	return sessions:inventory(userId)
+end
+
+-- A read-only or lost session can be looked at but must not change or trade: nothing it does
+-- would be saved.
+local function writable(userId: number): boolean
+	return sessions:writable(userId)
+end
 
 local equipSlots: { [string]: boolean } = {}
 for _, slot in Config.EquipSlots do
@@ -210,14 +232,8 @@ handlers = Handlers.new({
 	-- so an older autosave can't land after this save. A crash between the two writes can still
 	-- lose or duplicate the traded items.
 	onTradeDone = function(a: number, b: number)
-		for _, userId in { a, b } do
-			local session = sessions[userId]
-			if session ~= nil then
-				task.spawn(function()
-					session:save()
-				end)
-			end
-		end
+		sessions:save(a)
+		sessions:save(b)
 	end,
 })
 
@@ -234,36 +250,14 @@ end
 
 -- Sessions
 local function onPlayerAdded(player: Player)
-	local userId = player.UserId
-	local session, outcome = store:load("Player_" .. userId)
-	if session == nil then
-		if outcome == "locked" then
-			player:Kick("Your data is still open on another server. Rejoin in a minute.")
-		else
-			player:Kick("Couldn't load your data. Please rejoin.")
-		end
-		return
-	end
-	if player.Parent == nil then
-		releaseSession(session) -- they left while the load was running
-		return
-	end
-	sessions[userId] = session
-	local inv = liveInventory(userId)
-	if inv ~= nil then
-		sync:FireClient(player, { inventory = Inventory.encode(inv), viewOnly = not writable(userId) })
-	end
+	sessions:join(player.UserId, player)
 end
 
 local function onPlayerRemoving(player: Player)
 	local userId = player.UserId
-	handlers:playerLeft(userId)
+	handlers:playerLeft(userId) -- cancel any trade before the session goes
 	limiter:forget(userId)
-	local session = sessions[userId]
-	sessions[userId] = nil
-	if session ~= nil then
-		releaseSession(session)
-	end
+	sessions:leave(userId)
 end
 
 Players.PlayerAdded:Connect(onPlayerAdded)
@@ -284,26 +278,11 @@ end)
 task.spawn(function()
 	while true do
 		task.wait(Config.AutosaveSeconds)
-		for userId, session in sessions do
-			task.spawn(function()
-				if not session:save() and session.lost then
-					local player = Players:GetPlayerByUserId(userId)
-					if player then
-						player:Kick("Your data was opened on another server.")
-					end
-				end
-			end)
-		end
+		sessions:saveAll()
 	end
 end)
 
+-- Releases every session and waits for loads and releases still running, within the timeout.
 game:BindToClose(function()
-	for userId, session in sessions do
-		sessions[userId] = nil
-		releaseSession(session, Config.CloseTimeoutSeconds)
-	end
-	local deadline = os.clock() + Config.CloseTimeoutSeconds
-	while releasing > 0 and os.clock() < deadline do
-		task.wait(0.1)
-	end
+	sessions:close()
 end)
