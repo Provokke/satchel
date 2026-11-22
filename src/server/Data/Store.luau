@@ -154,14 +154,23 @@ function Store.load(self: Store, key: string, keepTrying: (() -> boolean)?): (Se
 	-- own lease ("taken") instead of being held out by it.
 	local owner = deps.jobId .. ":" .. deps.nonce()
 	local lastFailure = "error"
+	-- An attempt that errored may still have landed before the call failed. When giving up after
+	-- one, clear the lease it may have left: one call, and it saves the player a lockout for the
+	-- lease length. The release only writes if the lease really is ours.
+	local function giveUp(result: string): (Session?, string)
+		if lastFailure == "error" then
+			releaseLease(deps, key, owner, nil, 0)
+		end
+		return nil, result
+	end
 	for attempt = 1, deps.retries do
 		if attempt > 1 then
 			if keepTrying ~= nil and not keepTrying() then
-				return nil, "cancelled"
+				return giveUp("cancelled")
 			end
 			deps.wait(deps.retryBase * 2 ^ (attempt - 2))
 			if keepTrying ~= nil and not keepTrying() then
-				return nil, "cancelled"
+				return giveUp("cancelled")
 			end
 		end
 		local ok, outcome, record = update(deps, key, function(stored: any)
@@ -204,12 +213,7 @@ function Store.load(self: Store, key: string, keepTrying: (() -> boolean)?): (Se
 		end
 		lastFailure = if ok then "locked" else "error"
 	end
-	if lastFailure == "error" then
-		-- The last attempt may have landed before the call failed. Clearing the lease costs one
-		-- call and saves the player a lockout for the lease length.
-		releaseLease(deps, key, owner, nil, 0)
-	end
-	return nil, lastFailure
+	return giveUp(lastFailure)
 end
 
 -- The stored form of the session's data as it is right now. Called inside transforms, so it

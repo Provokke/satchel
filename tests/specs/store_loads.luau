@@ -144,4 +144,25 @@ return {
 			assert(outcome2 == "locked" and ds.calls == 6, `{outcome2} {ds.calls}`)
 		end,
 	},
+	{
+		name = "a load called off after a claim that landed but errored hands that lease back",
+		run = function()
+			local records: any = {}
+			local store, ds = server(records, FakeClock.new(0), "JOB", { retries = 3 })
+			ds:commitThenFailNext(1, "timed out")
+			local session, outcome = store:load("p1", function()
+				return false -- the player left during the first attempt
+			end)
+			assert(session == nil and outcome == "cancelled", outcome)
+			assert(records.p1 ~= nil and records.p1.lease == nil, "the landed claim's lease is cleared")
+			-- control: a call-off after a held attempt writes nothing at all
+			local holder = server(records, FakeClock.new(0), "A")
+			assert(holder:load("p1") ~= nil)
+			local before = records.p1
+			local _, outcome2 = store:load("p1", function()
+				return false
+			end)
+			assert(outcome2 == "cancelled" and records.p1 == before)
+		end,
+	},
 }
