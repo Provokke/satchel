@@ -119,4 +119,27 @@ return {
 			assert(rec2 ~= nil)
 		end,
 	},
+	{
+		name = "release by an owner whose release already landed writes nothing and says released",
+		run = function()
+			local landed: any = { schema = 1, data = { gold = 7 }, savedAt = 10, releasedBy = "A" }
+			local rec, outcome = Lease.release(landed, "A", 100, { gold = 1 }, true)
+			assert(outcome == "released" and rec == nil, outcome)
+			-- and still after another session has claimed it since
+			local claimed = Lease.claim(landed, "B", 101, 180, def)
+			assert(claimed ~= nil and claimed.releasedBy == "A", "claim keeps releasedBy")
+			local rec2, outcome2 = Lease.release(claimed, "A", 102, { gold = 1 }, true)
+			assert(outcome2 == "released" and rec2 == nil, outcome2)
+			-- control: someone else's release is not ours
+			local _, outcome3 = Lease.release(landed, "C", 100, { gold = 1 }, true)
+			assert(outcome3 == "lost", outcome3)
+		end,
+	},
+	{
+		name = "release stamps the owner it was released by",
+		run = function()
+			local rec = Lease.release(record("A", 500), "A", 100, { gold = 42 }, true)
+			assert(rec ~= nil and rec.releasedBy == "A")
+		end,
+	},
 }

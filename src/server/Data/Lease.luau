@@ -10,7 +10,15 @@
 local Lease = {}
 
 export type LeaseInfo = { owner: string, expiresAt: number }
-export type Record = { schema: number, data: { [string]: any }, lease: LeaseInfo?, savedAt: number }
+export type Record = {
+	schema: number,
+	data: { [string]: any },
+	lease: LeaseInfo?,
+	savedAt: number,
+	-- The owner whose release last landed. Owners are never reused, so a release retry that finds
+	-- its own owner here knows its earlier attempt was committed even though the call errored.
+	releasedBy: string?,
+}
 
 local function deepCopy(value: any): any
 	if type(value) ~= "table" then
@@ -24,7 +32,7 @@ local function deepCopy(value: any): any
 end
 
 local function build(stored: Record, data: { [string]: any }, lease: LeaseInfo?, now: number): Record
-	return { schema = stored.schema, data = data, lease = lease, savedAt = now }
+	return { schema = stored.schema, data = data, lease = lease, savedAt = now, releasedBy = stored.releasedBy }
 end
 
 -- Load transform. Outcomes: "new", "taken" (no lease, or this session's own lease from an
@@ -73,7 +81,9 @@ function Lease.refresh(
 	return build(stored, nextData, { owner = owner, expiresAt = now + leaseSeconds }, now), "saved"
 end
 
--- Leave transform. Writes data (if writeData) and clears the lease. "released" or "lost".
+-- Leave transform. Writes data (if writeData), clears the lease and stamps releasedBy.
+-- "released", or "lost" when the lease is missing or not ours (returns nil). A retry whose
+-- earlier attempt already landed is "released" and writes nothing.
 function Lease.release(
 	stored: Record?,
 	owner: string,
@@ -81,11 +91,16 @@ function Lease.release(
 	data: { [string]: any },
 	writeData: boolean
 ): (Record?, string)
+	if stored ~= nil and stored.releasedBy == owner then
+		return nil, "released"
+	end
 	if stored == nil or not owns(stored, owner) then
 		return nil, "lost"
 	end
 	local nextData = if writeData then deepCopy(data) else deepCopy(stored.data)
-	return build(stored, nextData, nil, now), "released"
+	local record = build(stored, nextData, nil, now)
+	record.releasedBy = owner
+	return record, "released"
 end
 
 return Lease
