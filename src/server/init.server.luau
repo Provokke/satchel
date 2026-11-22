@@ -58,6 +58,9 @@ local store = Store.new({
 	nonce = function(): string
 		return HttpService:GenerateGUID(false)
 	end,
+	resume = function(thread: thread)
+		task.spawn(thread)
+	end,
 	leaseSeconds = Config.LeaseSeconds,
 	retries = Config.LoadRetries,
 	retryBase = Config.RetryBaseSeconds,
@@ -180,8 +183,10 @@ handlers = Handlers.new({
 			sentTo = view.sentTo,
 		})
 	end,
-	-- A trade writes two DataStore keys, which is not atomic. Saving both straight away keeps the
-	-- window for a crash between the two writes as short as it can be.
+	-- A trade writes two DataStore keys, which is not atomic. Both are saved straight away. Each
+	-- save builds its payload when it writes, and saves for one session queue rather than race,
+	-- so an older autosave can't land after this save. A crash between the two writes can still
+	-- lose or duplicate the traded items.
 	onTradeDone = function(a: number, b: number)
 		for _, userId in { a, b } do
 			local session = sessions[userId]

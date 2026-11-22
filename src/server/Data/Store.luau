@@ -23,6 +23,8 @@ export type Deps = {
 	-- session's lease owner is jobId .. ":" .. nonce(), so the lease belongs to one session and a
 	-- second load of the same key on the same server is locked out like any other.
 	nonce: () -> string,
+	-- Restarts a session call that was queued behind another one (task.spawn in Roblox).
+	resume: (thread: thread) -> (),
 	leaseSeconds: number,
 	retries: number,
 	retryBase: number,
@@ -44,6 +46,8 @@ export type Session = typeof(setmetatable(
 		readOnly: boolean,
 		lost: boolean,
 		released: boolean,
+		busy: boolean, -- a save or release is in flight
+		queue: { thread }, -- calls waiting for it, oldest first
 		deps: Deps,
 	},
 	Session
@@ -126,6 +130,8 @@ function Store.load(self: Store, key: string): (Session?, string)
 				readOnly = readOnly,
 				lost = false,
 				released = false,
+				busy = false,
+				queue = {},
 				deps = deps,
 			}, Session)
 			return session, outcome :: string
@@ -136,6 +142,8 @@ function Store.load(self: Store, key: string): (Session?, string)
 	return nil, lastFailure
 end
 
+-- The stored form of the session's data as it is right now. Called inside transforms, so it
+-- must not yield (encode is a plain copy).
 local function stored(session: Session): Data
 	local encode = session.deps.encode
 	if encode then
@@ -144,65 +152,107 @@ local function stored(session: Session): Data
 	return session.data
 end
 
-function Session.save(self: Session): boolean
-	if self.lost or self.released then
-		return false
+-- Saves and releases for one session run one at a time, in the order they were asked for. A
+-- call that finds another in flight queues behind it and is resumed when that one finishes.
+--
+-- Why both this and building the payload inside the transform: the payload is read when the
+-- transform runs, so whichever run commits writes the session as it is at that moment, never a
+-- snapshot taken before a budget wait or before a re-run. The queue then makes the order of
+-- writes the order they were asked for, so nothing runs after the release (which would read as
+-- a lost lease) and two saves never spend budget at the same time.
+local function lock(self: Session)
+	if self.busy then
+		table.insert(self.queue, coroutine.running())
+		coroutine.yield()
+		return -- unlock handed the lock straight to us
 	end
-	local deps = self.deps
-	local writeData = not self.readOnly
-	local payload = stored(self)
-	local ok, outcome = update(deps, self.key, function(current: any)
-		local record, result =
-			deps.lease.refresh(current, self.owner, deps.clock(), deps.leaseSeconds, payload, writeData)
-		if record ~= nil and writeData then
-			record.schema = deps.schema
-		end
-		return record, result
-	end)
-	if not ok then
-		return false -- a failed write is not a lost lease: the next autosave tries again
-	end
-	if outcome == "lost" then
-		self.lost = true
-		deps.log(`lease lost for {self.key}`)
-		return false
-	end
-	return true
+	self.busy = true
 end
 
-function Session.release(self: Session): boolean
-	if self.released then
-		return true
+local function unlock(self: Session)
+	local nextThread = table.remove(self.queue, 1)
+	if nextThread ~= nil then
+		self.deps.resume(nextThread)
+	else
+		self.busy = false
 	end
-	if self.lost then
+end
+
+local function exclusive(self: Session, body: () -> boolean): boolean
+	lock(self)
+	local ok, result = pcall(body)
+	unlock(self)
+	if not ok then
+		self.deps.log(`session call failed for {self.key}: {tostring(result)}`)
 		return false
 	end
-	local deps = self.deps
-	local writeData = not self.readOnly
-	local payload = stored(self)
-	local attempts = math.min(deps.retries, 3)
-	for attempt = 1, attempts do
+	return result
+end
+
+function Session.save(self: Session): boolean
+	return exclusive(self, function()
+		if self.lost or self.released then
+			return false
+		end
+		local deps = self.deps
+		local writeData = not self.readOnly
 		local ok, outcome = update(deps, self.key, function(current: any)
-			local record, result = deps.lease.release(current, self.owner, deps.clock(), payload, writeData)
+			local payload = if writeData then stored(self) else {}
+			local record, result =
+				deps.lease.refresh(current, self.owner, deps.clock(), deps.leaseSeconds, payload, writeData)
 			if record ~= nil and writeData then
 				record.schema = deps.schema
 			end
 			return record, result
 		end)
-		if ok then
-			if outcome == "lost" then
-				self.lost = true
-				deps.log(`lease lost for {self.key}`)
-				return false
-			end
-			self.released = true
+		if not ok then
+			return false -- a failed write is not a lost lease: the next autosave tries again
+		end
+		if outcome == "lost" then
+			self.lost = true
+			deps.log(`lease lost for {self.key}`)
+			return false
+		end
+		return true
+	end)
+end
+
+function Session.release(self: Session): boolean
+	return exclusive(self, function()
+		if self.released then
 			return true
 		end
-		if attempt < attempts then
-			deps.wait(deps.retryBase * 2 ^ (attempt - 1))
+		if self.lost then
+			return false
 		end
-	end
-	return false
+		local deps = self.deps
+		local writeData = not self.readOnly
+		local attempts = math.min(deps.retries, 3)
+		for attempt = 1, attempts do
+			local ok, outcome = update(deps, self.key, function(current: any)
+				local payload = if writeData then stored(self) else {}
+				local record, result =
+					deps.lease.release(current, self.owner, deps.clock(), payload, writeData)
+				if record ~= nil and writeData then
+					record.schema = deps.schema
+				end
+				return record, result
+			end)
+			if ok then
+				if outcome == "lost" then
+					self.lost = true
+					deps.log(`lease lost for {self.key}`)
+					return false
+				end
+				self.released = true
+				return true
+			end
+			if attempt < attempts then
+				deps.wait(deps.retryBase * 2 ^ (attempt - 1))
+			end
+		end
+		return false
+	end)
 end
 
 return Store
