@@ -1,0 +1,17 @@
+{
+	"name": "satchel",
+	"tree": {
+		"$className": "DataModel",
+		"ReplicatedStorage": {
+			"Satchel": { "$path": "src/shared" }
+		},
+		"ServerScriptService": {
+			"Satchel": { "$path": "src/server" }
+		},
+		"StarterPlayer": {
+			"StarterPlayerScripts": {
+				"Satchel": { "$path": "src/client" }
+			}
+		}
+	}
+}
