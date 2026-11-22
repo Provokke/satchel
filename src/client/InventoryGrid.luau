@@ -44,6 +44,10 @@ export type InventoryGrid = typeof(setmetatable(
 		slots: { [number]: Stack },
 		equipped: { [string]: string },
 		drag: Drag?,
+		notice: TextLabel,
+		viewOnly: boolean,
+		flashToken: number,
+		flashing: boolean,
 	},
 	InventoryGrid
 ))
@@ -52,6 +56,8 @@ local CELL = 64
 local PAD = 6
 local COLUMNS = 6
 local DRAG_THRESHOLD = 6 -- pixels before a press counts as a drag rather than a click
+local FLASH_SECONDS = 4
+local VIEW_ONLY_TEXT = "View-only: this server can't save your bag, so nothing can change or be traded here."
 
 local function makeCell(deps: Deps, parent: Instance, size: number): Cell
 	local theme = deps.theme
@@ -114,6 +120,15 @@ function InventoryGrid.new(deps: Deps): InventoryGrid
 	title.Position = UDim2.fromOffset(PAD + 4, 6)
 	title.Size = UDim2.fromOffset(120, 22)
 
+	-- One line above the panel for messages from the server.
+	local notice = theme.label(root, "", 14, theme.bad)
+	notice.AnchorPoint = Vector2.new(0, 1)
+	notice.Position = UDim2.new(0, 0, 0, -6)
+	notice.Size = UDim2.new(1, 0, 0, 36)
+	notice.TextWrapped = true
+	notice.TextXAlignment = Enum.TextXAlignment.Center
+	notice.Visible = false
+
 	local tradeButton = theme.button(root, "Trade")
 	tradeButton.AnchorPoint = Vector2.new(1, 0)
 	tradeButton.Position = UDim2.new(1, -PAD - 4, 0, 6)
@@ -140,6 +155,10 @@ function InventoryGrid.new(deps: Deps): InventoryGrid
 		slots = {},
 		equipped = {},
 		drag = nil,
+		notice = notice,
+		viewOnly = false,
+		flashToken = 0,
+		flashing = false,
 	}, InventoryGrid)
 
 	for order, slotName in deps.equipSlots do
@@ -288,6 +307,35 @@ local function show(deps: Deps, cell: Cell, id: string?, count: number?)
 	cell.name.Text = if def then def.name else id
 	cell.name.TextColor3 = theme.text
 	cell.count.Text = if count ~= nil and count > 1 then tostring(count) else ""
+end
+
+local function showNotice(self: InventoryGrid)
+	if self.flashing then
+		return
+	end
+	self.notice.Visible = self.viewOnly
+	self.notice.Text = if self.viewOnly then VIEW_ONLY_TEXT else ""
+end
+
+-- The view-only line stays up for as long as the server says the session can't be saved.
+function InventoryGrid.setViewOnly(self: InventoryGrid, on: boolean)
+	self.viewOnly = on
+	showNotice(self)
+end
+
+-- Shows a message for a few seconds, then goes back to the view-only line (if any).
+function InventoryGrid.flash(self: InventoryGrid, text: string)
+	self.flashToken += 1
+	local token = self.flashToken
+	self.flashing = true
+	self.notice.Text = text
+	self.notice.Visible = true
+	task.delay(FLASH_SECONDS, function()
+		if self.flashToken == token then
+			self.flashing = false
+			showNotice(self)
+		end
+	end)
 end
 
 -- `slots` and `equipped` come from the latest Sync.

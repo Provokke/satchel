@@ -22,6 +22,7 @@ end
 local function setup(invA: any, invB: any, capacity: number?)
 	local clock = FakeClock.new(0)
 	local live: { [any]: any } = { a = invA, b = invB }
+	local unsaved: { [any]: boolean } = {} -- keys whose session can't be saved
 	local trade = Trade.new("a", "b", {
 		inventory = Inventory,
 		defs = defs,
@@ -34,8 +35,11 @@ local function setup(invA: any, invB: any, capacity: number?)
 		getInventory = function(key: any)
 			return live[key]
 		end,
+		writable = function(key: any)
+			return not unsaved[key]
+		end,
 	})
-	return trade, clock, live
+	return trade, clock, live, unsaved
 end
 
 local function confirmBoth(trade: any)
@@ -223,6 +227,34 @@ return {
 			trade:cancel("other")
 			assert(trade.reason == "declined", "the first reason is kept")
 			assert(trade:offer("a", 1, 1) == false, "no offers on a closed trade")
+		end,
+	},
+	{
+		name = "commit cancels when either side can't be saved, and nothing moves",
+		run = function()
+			for _, side in { "a", "b" } do
+				local invA = bag({ { id = "apple", count = 10 } })
+				local invB = bag({ { id = "coin", count = 5 } })
+				local trade, clock, _live, unsaved = setup(invA, invB)
+				assert(trade:offer("a", 1, 4) == true)
+				assert(trade:offer("b", 1, 5) == true)
+				confirmBoth(trade)
+				unsaved[side] = true
+				clock:advance(3)
+				assert(trade:tick() == "cancelled" and trade.reason == "view_only", trade.reason)
+				assert(Inventory.countOf(invA, "apple") == 10 and Inventory.countOf(invA, "coin") == 0)
+				assert(Inventory.countOf(invB, "coin") == 5 and Inventory.countOf(invB, "apple") == 0)
+			end
+			-- control: both sides savable, the same trade commits
+			local invA = bag({ { id = "apple", count = 10 } })
+			local invB = bag({ { id = "coin", count = 5 } })
+			local trade, clock = setup(invA, invB)
+			assert(trade:offer("a", 1, 4) == true)
+			assert(trade:offer("b", 1, 5) == true)
+			confirmBoth(trade)
+			clock:advance(3)
+			assert(trade:tick() == "done")
+			assert(Inventory.countOf(invA, "coin") == 5 and Inventory.countOf(invB, "apple") == 4)
 		end,
 	},
 }

@@ -43,6 +43,7 @@ local REASONS: { [string]: string } = {
 	left = "The other player left.",
 	distance = "You moved too far apart.",
 	cancelled = "The trade was cancelled.",
+	view_only = "One of you can't save on this server right now, so nothing moved.",
 }
 
 local function clear(container: Instance)

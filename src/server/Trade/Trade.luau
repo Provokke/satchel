@@ -15,6 +15,8 @@ export type Deps = {
 	countdown: number,
 	maxOfferSlots: number,
 	getInventory: (key: any) -> any,
+	-- false when that player's session can't be saved (loaded read-only, or its lease is gone).
+	writable: (key: any) -> boolean,
 }
 
 export type Trade = typeof(setmetatable(
@@ -160,6 +162,12 @@ local function commit(self: Trade)
 	local invB = deps.getInventory(self.b)
 	if invA == nil or invB == nil then
 		self:cancel("left")
+		return
+	end
+	-- Checked again here, not only when the trade opened: a side whose session can't be saved
+	-- would keep (or never store) what it traded once the other side saves.
+	if not deps.writable(self.a) or not deps.writable(self.b) then
+		self:cancel("view_only")
 		return
 	end
 	local Inventory = deps.inventory

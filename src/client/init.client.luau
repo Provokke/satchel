@@ -113,14 +113,25 @@ local function decode(saved: any): ({ [number]: { id: string, count: number } },
 	return slots, saved.equipped
 end
 
+-- Messages the server sends when it refuses something the player can't fix by trying again.
+local NOTICES: { [string]: string } = {
+	view_only = "Your bag is view-only on this server. Rejoin to change or trade it.",
+	partner_view_only = "That player can't trade on this server right now.",
+}
+
 sync.OnClientEvent:Connect(function(payload: any)
 	if type(payload) ~= "table" then
 		return
 	end
-	if payload.inventory ~= nil then
-		local slots, equipped = decode(payload.inventory)
-		grid:render(slots, equipped)
+	if type(payload.notice) == "string" then
+		grid:flash(NOTICES[payload.notice] or "That can't be done right now.")
 	end
+	if payload.inventory == nil then
+		return -- a notice on its own: the bag and the trade are unchanged
+	end
+	local slots, equipped = decode(payload.inventory)
+	grid:render(slots, equipped)
+	grid:setViewOnly(payload.viewOnly == true)
 	local trade = payload.trade
 	inTrade = trade ~= nil and (trade.state == "open" or trade.state == "countdown")
 	tradeWindow:update(payload)

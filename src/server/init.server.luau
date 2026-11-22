@@ -107,6 +107,13 @@ local function liveInventory(userId: number): any
 	return session.data.inventory
 end
 
+-- A read-only or lost session can be looked at but must not change or trade: nothing it does
+-- would be saved.
+local function writable(userId: number): boolean
+	local session = sessions[userId]
+	return session ~= nil and not session.lost and not session.readOnly
+end
+
 -- Remotes
 local remotes = Instance.new("Folder")
 remotes.Name = "SatchelRemotes"
@@ -147,6 +154,7 @@ handlers = Handlers.new({
 			countdown = Config.Trade.CountdownSeconds,
 			maxOfferSlots = Config.Trade.MaxOfferSlots,
 			getInventory = liveInventory,
+			writable = writable,
 		})
 	end,
 	defs = Config.Items,
@@ -154,6 +162,13 @@ handlers = Handlers.new({
 	equipSlots = equipSlots,
 	limiter = limiter,
 	getInventory = liveInventory,
+	writable = writable,
+	tell = function(userId: number, notice: string)
+		local player = Players:GetPlayerByUserId(userId)
+		if player then
+			sync:FireClient(player, { notice = notice })
+		end
+	end,
 	isNear = function(a: number, b: number): boolean
 		local pa, pb = positionOf(a), positionOf(b)
 		return pa ~= nil and pb ~= nil and (pa - pb).Magnitude <= Config.Trade.MaxDistance
@@ -180,6 +195,7 @@ handlers = Handlers.new({
 		end
 		sync:FireClient(player, {
 			inventory = Inventory.encode(inv),
+			viewOnly = not writable(userId),
 			trade = view.trade,
 			request = view.request,
 			sentTo = view.sentTo,
@@ -236,7 +252,7 @@ local function onPlayerAdded(player: Player)
 	sessions[userId] = session
 	local inv = liveInventory(userId)
 	if inv ~= nil then
-		sync:FireClient(player, { inventory = Inventory.encode(inv) })
+		sync:FireClient(player, { inventory = Inventory.encode(inv), viewOnly = not writable(userId) })
 	end
 end
 

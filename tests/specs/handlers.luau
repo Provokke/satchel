@@ -26,7 +26,9 @@ local function setup(burst: number?)
 			[3] = Inventory.empty(),
 		},
 		apart = {},
+		viewOnly = {}, -- players whose session can't be saved (read-only or lost)
 		notified = {},
+		told = {},
 		done = {},
 	}
 	world.inv[1].slots[1] = { id = "apple", count = 10 }
@@ -46,6 +48,9 @@ local function setup(burst: number?)
 				getInventory = function(key: any)
 					return world.inv[key]
 				end,
+				writable = function(key: any)
+					return not world.viewOnly[key]
+				end,
 			})
 		end,
 		defs = defs,
@@ -54,6 +59,12 @@ local function setup(burst: number?)
 		limiter = RateLimiter.new(burst or 100, 100, now),
 		getInventory = function(userId: number)
 			return world.inv[userId]
+		end,
+		writable = function(userId: number)
+			return not world.viewOnly[userId]
+		end,
+		tell = function(userId: number, notice: string)
+			table.insert(world.told, `{userId}:{notice}`)
 		end,
 		isNear = function(a: number, b: number)
 			return not (world.apart[a] or world.apart[b])
@@ -274,6 +285,75 @@ return {
 				handlers:tick()
 			end
 			assert((world.notified[1] or 0) == before, "no change, no sync")
+		end,
+	},
+	{
+		name = "a view-only player can't change their bag and is told why",
+		run = function()
+			local handlers, world = setup()
+			world.viewOnly[1] = true
+			local before = Deep.copy(world.inv[1])
+			assert(handlers:handle(1, "move", 1, 3) == false)
+			assert(Deep.equal(world.inv[1], before), "the bag is untouched")
+			assert(table.concat(world.told, ",") == "1:view_only", table.concat(world.told, ","))
+			-- control: once the session can save, the same move works
+			world.viewOnly[1] = nil
+			assert(handlers:handle(1, "move", 1, 3) == true)
+			assert(world.inv[1].slots[3].id == "apple" and world.inv[1].slots[1] == nil)
+		end,
+	},
+	{
+		name = "nobody can trade with a view-only player, and the asker is told why",
+		run = function()
+			local handlers, world = setup()
+			world.viewOnly[2] = true
+			assert(handlers:handle(1, "tradeRequest", 2) == false)
+			assert(handlers:view(2).request == nil, "no request was sent")
+			assert(table.concat(world.told, ",") == "1:partner_view_only", table.concat(world.told, ","))
+			-- control
+			world.viewOnly[2] = nil
+			assert(handlers:handle(1, "tradeRequest", 2) == true)
+			assert(handlers:view(2).request ~= nil)
+		end,
+	},
+	{
+		name = "accepting a request from a player who can no longer save opens no trade",
+		run = function()
+			local handlers, world = setup()
+			assert(handlers:handle(1, "tradeRequest", 2) == true)
+			world.viewOnly[1] = true -- player 1's lease was lost after asking
+			assert(handlers:handle(2, "tradeRespond", true) == false)
+			assert(handlers:view(2).trade == nil and handlers:view(1).trade == nil)
+			assert(table.concat(world.told, ",") == "2:partner_view_only", table.concat(world.told, ","))
+			-- control
+			world.viewOnly[1] = nil
+			startTrade(handlers)
+			assert(handlers:view(2).trade ~= nil)
+		end,
+	},
+	{
+		name = "a trade is cancelled at commit when one side can no longer save, and nothing moves",
+		run = function()
+			local handlers, world, clock = setup()
+			startTrade(handlers)
+			handlers:handle(1, "tradeOffer", 1, 4)
+			handlers:handle(1, "tradeConfirm", true)
+			handlers:handle(2, "tradeConfirm", true)
+			world.viewOnly[2] = true
+			clock:advance(3)
+			handlers:tick()
+			assert(Inventory.countOf(world.inv[1], "apple") == 10 and Inventory.countOf(world.inv[2], "apple") == 0)
+			assert(#world.done == 0, "no saves for a trade that did not happen")
+			assert(handlers:view(1).trade == nil, "the trade has ended")
+			-- control
+			world.viewOnly[2] = nil
+			startTrade(handlers)
+			handlers:handle(1, "tradeOffer", 1, 4)
+			handlers:handle(1, "tradeConfirm", true)
+			handlers:handle(2, "tradeConfirm", true)
+			clock:advance(3)
+			handlers:tick()
+			assert(Inventory.countOf(world.inv[2], "apple") == 4 and #world.done == 1)
 		end,
 	},
 }

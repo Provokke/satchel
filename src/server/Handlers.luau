@@ -4,7 +4,13 @@
 --
 -- Clients send intent only. A call is dropped and counted when the action is unknown, the rate
 -- limit is spent, an argument is the wrong type or out of range, or a game rule refuses it.
--- Nothing is ever reported back to the caller about why.
+-- Nothing is reported back to the caller about why, with one exception: a player whose session
+-- can't be saved is told so, because otherwise their bag just looks broken.
+--
+-- A session that can't be saved (it loaded read-only from a newer version of the game, or its
+-- lease has gone) can look at its bag but change nothing and trade with nobody. Anything it
+-- changed would never be stored, so a trade would leave the other player's saved copy holding
+-- items this one also keeps, or would take items from the other player and store them nowhere.
 local Handlers = {}
 Handlers.__index = Handlers
 
@@ -19,6 +25,8 @@ export type Deps = {
 	equipSlots: { [string]: boolean },
 	limiter: { take: (self: any, key: any, cost: number?) -> boolean },
 	getInventory: (userId: number) -> any, -- live inventory, or nil when not loaded or lost
+	writable: (userId: number) -> boolean, -- false when the session can't be saved (see above)
+	tell: (userId: number, notice: string) -> (), -- "view_only" or "partner_view_only"
 	isNear: (a: number, b: number) -> boolean,
 	clock: () -> number,
 	countdown: number,
@@ -114,6 +122,10 @@ function Handlers.handle(self: Handlers, userId: number, action: any, a: any, b:
 	if inv == nil then
 		return reject(self)
 	end
+	if not deps.writable(userId) then
+		deps.tell(userId, "view_only")
+		return reject(self)
+	end
 
 	if action == "move" then
 		if not (v.isInteger(a, 1, deps.capacity) and v.isInteger(b, 1, deps.capacity)) then
@@ -161,6 +173,10 @@ function Handlers.handle(self: Handlers, userId: number, action: any, a: any, b:
 		then
 			return reject(self)
 		end
+		if not deps.writable(a) then
+			deps.tell(userId, "partner_view_only")
+			return reject(self)
+		end
 		self.requests[a] = { from = userId, at = deps.clock() }
 		deps.notify(a)
 		deps.notify(userId)
@@ -188,6 +204,12 @@ function Handlers.handle(self: Handlers, userId: number, action: any, a: any, b:
 		then
 			deps.notify(userId)
 			deps.notify(from)
+			return reject(self)
+		end
+		if not deps.writable(from) then
+			deps.notify(userId)
+			deps.notify(from)
+			deps.tell(userId, "partner_view_only")
 			return reject(self)
 		end
 		local trade = deps.newTrade(from, userId)
