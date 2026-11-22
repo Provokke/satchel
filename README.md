@@ -10,6 +10,8 @@ Refer to [LICENSE](LICENSE) for the legal bits.
 
 </div>
 
+![Equipping a tunic and helm by clicking, dragging the sword into the Weapon slot, moving coins and Shift-dragging to split a stack of apples](docs/media/drag.gif)
+
 ## What's in it
 
 - **Session lock with a lease.** Each load claims the player's record with a lease through one `UpdateAsync`. The lease belongs to that one session (the server's JobId plus a fresh GUID), so neither two servers nor two sessions on the same server can both write the same profile. A lease that nobody refreshed (a crashed server) expires and can be taken over. A server that finds its lease gone stops saving and kicks the player instead of overwriting the new owner's data.
@@ -28,6 +30,16 @@ Items = table.freeze({
 	iron_helm = table.freeze({ name = "Iron Helm", maxStack = 1, slot = "Head", colour = { 150, 155, 165 } }),
 }),
 ```
+
+## 🎮 Demo place
+
+`demo/satchel.rbxl` is a ready-made place: a walled trading yard with a trade table and market stalls. Open it in Studio and press Play; B shows and hides the bag. Click an item to wear it, drag to move it, and hold Shift while dragging to split a stack. Every shot here comes from a Studio play test of that place.
+
+| Before | After |
+|---|---|
+| ![The bag with a full set of starting items](docs/media/bag.jpg) | ![Items worn, moved and a stack split](docs/media/after.jpg) |
+
+For these shots the starting items in `Config.luau` were swapped for a fuller set. The shipped config starts a new player with 5 apples. Trading needs two players, so it isn't shown here; it's covered by the Lune tests, and you can try it in Studio with a two-player local server.
 
 ## 🏗️ Architecture
 
