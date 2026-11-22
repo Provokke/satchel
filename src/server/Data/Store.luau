@@ -18,7 +18,11 @@ export type Deps = {
 	clock: () -> number,
 	wait: (seconds: number) -> (),
 	budget: (kind: string) -> number, -- "update"; the entry script maps it to Enum.DataStoreRequestType.UpdateAsync
-	jobId: string,
+	jobId: string, -- this server's id
+	-- A fresh unique string for every load (the entry script uses HttpService:GenerateGUID). The
+	-- session's lease owner is jobId .. ":" .. nonce(), so the lease belongs to one session and a
+	-- second load of the same key on the same server is locked out like any other.
+	nonce: () -> string,
 	leaseSeconds: number,
 	retries: number,
 	retryBase: number,
@@ -35,6 +39,7 @@ export type Deps = {
 export type Session = typeof(setmetatable(
 	{} :: {
 		key: string,
+		owner: string, -- the lease owner for this session
 		data: Data,
 		readOnly: boolean,
 		lost: boolean,
@@ -98,11 +103,14 @@ function Store.load(self: Store, key: string): (Session?, string)
 		return data
 	end
 
+	-- One owner for every attempt, so a retry after a claim that landed but errored finds its
+	-- own lease ("taken") instead of being held out by it.
+	local owner = deps.jobId .. ":" .. deps.nonce()
 	local lastFailure = "error"
 	for attempt = 1, deps.retries do
 		local ok, outcome, record = update(deps, key, function(stored: any)
 			local claimed, result =
-				deps.lease.claim(stored, deps.jobId, deps.clock(), deps.leaseSeconds, freshData)
+				deps.lease.claim(stored, owner, deps.clock(), deps.leaseSeconds, freshData)
 			if claimed ~= nil and result == "new" then
 				claimed.schema = deps.schema
 			end
@@ -113,6 +121,7 @@ function Store.load(self: Store, key: string): (Session?, string)
 			local data = if decode then decode(saved) else saved
 			local session = setmetatable({
 				key = key,
+				owner = owner,
 				data = data,
 				readOnly = readOnly,
 				lost = false,
@@ -144,7 +153,7 @@ function Session.save(self: Session): boolean
 	local payload = stored(self)
 	local ok, outcome = update(deps, self.key, function(current: any)
 		local record, result =
-			deps.lease.refresh(current, deps.jobId, deps.clock(), deps.leaseSeconds, payload, writeData)
+			deps.lease.refresh(current, self.owner, deps.clock(), deps.leaseSeconds, payload, writeData)
 		if record ~= nil and writeData then
 			record.schema = deps.schema
 		end
@@ -174,7 +183,7 @@ function Session.release(self: Session): boolean
 	local attempts = math.min(deps.retries, 3)
 	for attempt = 1, attempts do
 		local ok, outcome = update(deps, self.key, function(current: any)
-			local record, result = deps.lease.release(current, deps.jobId, deps.clock(), payload, writeData)
+			local record, result = deps.lease.release(current, self.owner, deps.clock(), payload, writeData)
 			if record ~= nil and writeData then
 				record.schema = deps.schema
 			end

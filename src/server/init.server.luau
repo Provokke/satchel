@@ -2,6 +2,7 @@
 -- Satchel server entry. This is where services, remotes and the DataStore are touched. The rules
 -- themselves live in the leaf modules next to it and are covered by the Lune tests.
 local DataStoreService = game:GetService("DataStoreService")
+local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -54,6 +55,9 @@ local store = Store.new({
 		return DataStoreService:GetRequestBudgetForRequestType(Enum.DataStoreRequestType.UpdateAsync)
 	end,
 	jobId = jobId,
+	nonce = function(): string
+		return HttpService:GenerateGUID(false)
+	end,
 	leaseSeconds = Config.LeaseSeconds,
 	retries = Config.LoadRetries,
 	retryBase = Config.RetryBaseSeconds,

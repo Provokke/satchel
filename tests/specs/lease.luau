@@ -6,10 +6,10 @@ local function def(): { [string]: any }
 	return { gold = 0, inventory = { slots = {}, equipped = {} } }
 end
 
-local function record(jobId: string?, expiresAt: number?): any
+local function record(owner: string?, expiresAt: number?): any
 	local r: any = { schema = 1, data = { gold = 7 }, savedAt = 10 }
-	if jobId then
-		r.lease = { jobId = jobId, expiresAt = expiresAt }
+	if owner then
+		r.lease = { owner = owner, expiresAt = expiresAt }
 	end
 	return r
 end
@@ -22,7 +22,7 @@ return {
 			assert(outcome == "new", outcome)
 			assert(rec ~= nil)
 			assert(
-				rec.lease ~= nil and rec.lease.jobId == "A" and rec.lease.expiresAt == 280,
+				rec.lease ~= nil and rec.lease.owner == "A" and rec.lease.expiresAt == 280,
 				"lease should be A until 280"
 			)
 			assert(Deep.equal(rec.data, def()), "data should equal the defaults")
@@ -33,7 +33,7 @@ return {
 		run = function()
 			local rec, outcome = Lease.claim(record("B", 50), "A", 100, 180, def)
 			assert(outcome == "stolen", outcome)
-			assert(rec ~= nil and rec.lease ~= nil and rec.lease.jobId == "A")
+			assert(rec ~= nil and rec.lease ~= nil and rec.lease.owner == "A")
 			assert(rec.data.gold == 7, "stolen record keeps its data")
 		end,
 	},
@@ -45,11 +45,11 @@ return {
 			assert(rec == nil, "a held claim writes nothing")
 			local rec2, outcome2 = Lease.claim(record("B", 500), "A", 501, 180, def)
 			assert(outcome2 == "stolen", outcome2)
-			assert(rec2 ~= nil and rec2.lease ~= nil and rec2.lease.jobId == "A")
+			assert(rec2 ~= nil and rec2.lease ~= nil and rec2.lease.owner == "A")
 		end,
 	},
 	{
-		name = "claim on our own live lease is taken (a rejoin)",
+		name = "claim on our own live lease is taken (a retry of a claim that landed)",
 		run = function()
 			local rec, outcome = Lease.claim(record("A", 500), "A", 100, 180, def)
 			assert(outcome == "taken", outcome)

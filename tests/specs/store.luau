@@ -1,51 +1,10 @@
 --!strict
 local Deep = require("../fakes/Deep")
 local FakeClock = require("../fakes/FakeClock")
-local FakeDataStore = require("../fakes/FakeDataStore")
-local Lease = require("../../src/server/Data/Lease")
-local Migrations = require("../../src/server/Data/Migrations")
-local Store = require("../../src/server/Data/Store")
+local StoreServer = require("../fakes/StoreServer")
 
-local function defaultData(): { [string]: any }
-	return { gold = 0, inventory = { slots = {}, equipped = {} } }
-end
-
--- Builds one "server" over a shared backing table.
-local function server(records: any, clock: any, jobId: string, overrides: { [string]: any }?)
-	local ds = FakeDataStore.new(records)
-	local waits: { number } = {}
-	local logs: { string } = {}
-	local deps: any = {
-		dataStore = ds,
-		lease = Lease,
-		migrations = Migrations,
-		clock = function()
-			return clock:now()
-		end,
-		wait = function(seconds: number)
-			table.insert(waits, seconds)
-		end,
-		budget = function(_kind: string)
-			return 100
-		end,
-		jobId = jobId,
-		leaseSeconds = 180,
-		retries = 3,
-		retryBase = 1,
-		schema = 1,
-		steps = {},
-		defaultData = defaultData,
-		log = function(message: string)
-			table.insert(logs, message)
-		end,
-	}
-	if overrides then
-		for k, v in overrides do
-			deps[k] = v
-		end
-	end
-	return Store.new(deps), ds, waits, logs
-end
+local defaultData = StoreServer.defaultData
+local server = StoreServer.new
 
 return {
 	{
@@ -60,7 +19,8 @@ return {
 			session.data.gold = 12
 			assert(session:save() == true)
 			assert(records.p1.data.gold == 12, "backing data should hold the save")
-			assert(records.p1.lease.jobId == "A", "backing lease should be ours")
+			assert(records.p1.lease.owner == session.owner, "backing lease should be this session's")
+			assert(session.owner == "A:1", session.owner)
 			assert(records.p1.schema == 1, "schema stamped on the record")
 		end,
 	},
@@ -99,7 +59,7 @@ return {
 			assert(a:save() == false, "the old owner's save should fail")
 			assert(a.lost == true, "the old owner should know it lost the lease")
 			assert(records.p1.data.gold == 50, "the new owner's data must not be overwritten")
-			assert(records.p1.lease.jobId == "B")
+			assert(records.p1.lease.owner == b.owner)
 		end,
 	},
 	{
@@ -111,7 +71,7 @@ return {
 			local session, outcome = store:load("p1")
 			assert(session ~= nil and outcome == "new", outcome)
 			assert(ds.calls == 3, "third attempt succeeds")
-			assert(records.p1.lease.jobId == "A")
+			assert(records.p1.lease.owner == session.owner)
 		end,
 	},
 	{
