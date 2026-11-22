@@ -90,16 +90,25 @@ return {
 		run = function()
 			local readings = { 0, 0, 0, 1 }
 			local index = 0
-			local store, ds, waits = server({}, FakeClock.new(0), "A", {
+			local events: { string } = {}
+			local store, ds = server({}, FakeClock.new(0), "A", {
 				budget = function(_kind: string)
 					index += 1
 					return readings[math.min(index, #readings)]
 				end,
+				wait = function(seconds: number)
+					table.insert(events, `wait {seconds}`)
+				end,
 			})
+			ds.events = events
 			local session = store:load("p1")
 			assert(session ~= nil)
-			assert(#waits == 3, `expected 3 waits, got {#waits}`)
-			assert(ds.calls == 1)
+			local order = table.concat(events, ",")
+			assert(order == "wait 1,wait 1,wait 1,call p1", `order was {order}`)
+			-- control: with budget to spare there is no wait at all
+			table.clear(events)
+			assert(session:save() == true)
+			assert(table.concat(events, ",") == "call p1", table.concat(events, ","))
 		end,
 	},
 	{
@@ -172,6 +181,25 @@ return {
 			assert(session:release() == true)
 			local again = store:load("p1")
 			assert(again ~= nil and again.data.gold == 7, "session data is the decoded form")
+		end,
+	},
+	{
+		name = "a read-only release hands the lease back and keeps the stored data",
+		run = function()
+			local records: any = { p1 = { schema = 9, data = { gold = 5 }, savedAt = 0 } }
+			local store = server(records, FakeClock.new(0), "A")
+			local session = store:load("p1")
+			assert(session ~= nil and session.readOnly)
+			session.data.gold = 99
+			assert(session:release() == true)
+			assert(records.p1.lease == nil, "the lease is handed back")
+			assert(records.p1.data.gold == 5 and records.p1.schema == 9, "the newer data is kept")
+			-- control: a current-schema release writes its data
+			records.p2 = { schema = 1, data = { gold = 5 }, savedAt = 0 }
+			local current = store:load("p2")
+			assert(current ~= nil and not current.readOnly)
+			current.data.gold = 99
+			assert(current:release() == true and records.p2.data.gold == 99)
 		end,
 	},
 }

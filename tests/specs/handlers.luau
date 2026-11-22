@@ -356,4 +356,54 @@ return {
 			assert(Inventory.countOf(world.inv[2], "apple") == 4 and #world.done == 1)
 		end,
 	},
+	{
+		name = "leaving mid-countdown cancels the trade, and ticking past the countdown moves nothing",
+		run = function()
+			local handlers, world, clock = setup()
+			startTrade(handlers)
+			assert(handlers:handle(1, "tradeOffer", 1, 4) == true)
+			assert(handlers:handle(2, "tradeOffer", 1, 10) == true)
+			assert(handlers:handle(1, "tradeConfirm", true) == true)
+			assert(handlers:handle(2, "tradeConfirm", true) == true)
+			assert(handlers:view(1).trade.state == "countdown", "the countdown is running")
+			clock:advance(1)
+			handlers:playerLeft(2)
+			world.inv[2] = nil -- their session is gone
+			clock:advance(5)
+			handlers:tick()
+			assert(Inventory.countOf(world.inv[1], "apple") == 10 and Inventory.countOf(world.inv[1], "coin") == 0)
+			assert(#world.done == 0, "no saves")
+			assert(handlers:view(1).trade == nil)
+			-- control: staying through the countdown commits the same trade
+			local handlers2, world2, clock2 = setup()
+			startTrade(handlers2)
+			handlers2:handle(1, "tradeOffer", 1, 4)
+			handlers2:handle(2, "tradeOffer", 1, 10)
+			handlers2:handle(1, "tradeConfirm", true)
+			handlers2:handle(2, "tradeConfirm", true)
+			clock2:advance(6)
+			handlers2:tick()
+			assert(Inventory.countOf(world2.inv[1], "coin") == 10 and Inventory.countOf(world2.inv[2], "apple") == 4)
+			assert(#world2.done == 1)
+		end,
+	},
+	{
+		name = "a player whose session is gone can't act, and their open trade cancels",
+		run = function()
+			local handlers, world, clock = setup()
+			startTrade(handlers)
+			assert(handlers:handle(1, "tradeOffer", 1, 4) == true)
+			local inv1 = world.inv[1]
+			world.inv[1] = nil -- the lease was lost: getInventory now gives nil
+			assert(handlers:handle(1, "tradeConfirm", true) == false)
+			assert(handlers:handle(1, "move", 1, 3) == false)
+			clock:advance(1)
+			handlers:tick()
+			assert(handlers:view(2).trade == nil, "the trade is over")
+			assert(Inventory.countOf(inv1, "apple") == 10 and Inventory.countOf(world.inv[2], "apple") == 0)
+			-- control: with the session back the same move works
+			world.inv[1] = inv1
+			assert(handlers:handle(1, "move", 1, 3) == true)
+		end,
+	},
 }

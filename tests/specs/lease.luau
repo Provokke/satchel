@@ -142,4 +142,18 @@ return {
 			assert(rec ~= nil and rec.releasedBy == "A")
 		end,
 	},
+	{
+		name = "refresh and release on a record with no lease are lost and write nothing",
+		run = function()
+			local free = record(nil, nil) -- released by someone else
+			local rec, outcome = Lease.refresh(free, "A", 100, 180, { gold = 1 }, true)
+			assert(outcome == "lost" and rec == nil, outcome)
+			local rec2, outcome2 = Lease.release(free, "A", 100, { gold = 1 }, true)
+			assert(outcome2 == "lost" and rec2 == nil, outcome2)
+			-- control: the same calls on our own lease go through
+			local _, ok1 = Lease.refresh(record("A", 500), "A", 100, 180, { gold = 1 }, true)
+			local _, ok2 = Lease.release(record("A", 500), "A", 100, { gold = 1 }, true)
+			assert(ok1 == "saved" and ok2 == "released")
+		end,
+	},
 }
