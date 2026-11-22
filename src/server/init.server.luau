@@ -19,6 +19,7 @@ local Inventory = require(script.Inventory.Inventory)
 local Lease = require(script.Data.Lease)
 local MemoryStore = require(script.Data.MemoryStore)
 local Migrations = require(script.Data.Migrations)
+local Profile = require(script.Data.Profile)
 local Steps = require(script.Data.Steps)
 local Store = require(script.Data.Store)
 local Trade = require(script.Trade.Trade)
@@ -46,6 +47,13 @@ end
 
 local jobId = if game.JobId ~= "" then game.JobId else "studio"
 
+local profile = Profile.new({
+	inventory = Inventory,
+	defs = Config.Items,
+	capacity = Config.InventoryCapacity,
+	startingItems = Config.StartingItems,
+})
+
 local store = Store.new({
 	dataStore = dataStore,
 	lease = Lease,
@@ -67,18 +75,13 @@ local store = Store.new({
 	retryBase = Config.RetryBaseSeconds,
 	schema = Config.SchemaVersion,
 	steps = Steps,
-	defaultData = function()
-		return { inventory = Inventory.empty() }
-	end,
+	-- New profiles hold the starting items. Every field is stored; the bag with string slot keys,
+	-- so a bag with gaps never becomes a sparse array.
+	defaultData = profile.defaultData,
+	encode = profile.encode,
+	decode = profile.decode,
 	log = function(message: string)
 		warn("[Satchel] " .. message)
-	end,
-	-- The bag is stored with string slot keys, so a bag with gaps never becomes a sparse array.
-	encode = function(data)
-		return { inventory = Inventory.encode(data.inventory) }
-	end,
-	decode = function(saved)
-		return { inventory = Inventory.decode(saved.inventory) }
 	end,
 })
 
@@ -244,11 +247,6 @@ local function onPlayerAdded(player: Player)
 	if player.Parent == nil then
 		releaseSession(session) -- they left while the load was running
 		return
-	end
-	if outcome == "new" then
-		for _, item in Config.StartingItems do
-			Inventory.add(session.data.inventory, Config.Items, Config.InventoryCapacity, item.id, item.count)
-		end
 	end
 	sessions[userId] = session
 	local inv = liveInventory(userId)
