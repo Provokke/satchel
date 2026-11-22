@@ -217,7 +217,43 @@ function Session.save(self: Session): boolean
 	end)
 end
 
-function Session.release(self: Session): boolean
+-- Hands the lease on `key` back for `owner`. With `payload`, its result is written as the final
+-- data; without it the stored data is kept. Retries with doubling waits, capped at 30 s, until
+-- the write lands or turns out to be lost, or until the next wait would take the total past
+-- `waitLimit` seconds. Returns "released", "lost" or "error".
+local RELEASE_WAIT_CAP = 30
+
+local function releaseLease(deps: Deps, key: string, owner: string, payload: (() -> Data)?, waitLimit: number): string
+	local waited = 0
+	local attempt = 0
+	while true do
+		attempt += 1
+		local ok, outcome = update(deps, key, function(current: any)
+			local writeData = payload ~= nil
+			local data = if payload then payload() else {}
+			local record, result = deps.lease.release(current, owner, deps.clock(), data, writeData)
+			if record ~= nil and writeData then
+				record.schema = deps.schema
+			end
+			return record, result
+		end)
+		if ok and outcome ~= nil then
+			return outcome
+		end
+		local delay = math.min(deps.retryBase * 2 ^ (attempt - 1), RELEASE_WAIT_CAP)
+		if waited + delay > waitLimit then
+			return "error"
+		end
+		deps.wait(delay)
+		waited += delay
+	end
+end
+
+-- Final write and lease hand-back. A player's last minute of play is only safe once this lands,
+-- so it keeps trying for up to `waitLimit` seconds of waits (default: the lease length, after
+-- which another server may take the record anyway). Under BindToClose the entry script passes a
+-- shorter limit. Safe to call twice: a second call after success is a no-op that returns true.
+function Session.release(self: Session, waitLimit: number?): boolean
 	return exclusive(self, function()
 		if self.released then
 			return true
@@ -226,31 +262,22 @@ function Session.release(self: Session): boolean
 			return false
 		end
 		local deps = self.deps
-		local writeData = not self.readOnly
-		local attempts = math.min(deps.retries, 3)
-		for attempt = 1, attempts do
-			local ok, outcome = update(deps, self.key, function(current: any)
-				local payload = if writeData then stored(self) else {}
-				local record, result =
-					deps.lease.release(current, self.owner, deps.clock(), payload, writeData)
-				if record ~= nil and writeData then
-					record.schema = deps.schema
-				end
-				return record, result
-			end)
-			if ok then
-				if outcome == "lost" then
-					self.lost = true
-					deps.log(`lease lost for {self.key}`)
-					return false
-				end
-				self.released = true
-				return true
+		local payload = if self.readOnly
+			then nil
+			else function(): Data
+				return stored(self)
 			end
-			if attempt < attempts then
-				deps.wait(deps.retryBase * 2 ^ (attempt - 1))
-			end
+		local result = releaseLease(deps, self.key, self.owner, payload, waitLimit or deps.leaseSeconds)
+		if result == "released" then
+			self.released = true
+			return true
 		end
+		if result == "lost" then
+			self.lost = true
+			deps.log(`lease lost for {self.key}`)
+			return false
+		end
+		deps.log(`release gave up for {self.key}; the lease runs out on its own`)
 		return false
 	end)
 end

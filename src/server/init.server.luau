@@ -84,11 +84,13 @@ local store = Store.new({
 local sessions: { [number]: any } = {}
 local releasing = 0
 
-local function releaseSession(session: any)
+-- waitLimit is how long the release may spend retrying; nil means the store's default (the lease
+-- length), which is right while the server is running.
+local function releaseSession(session: any, waitLimit: number?)
 	releasing += 1
 	task.spawn(function()
 		local ok, err = pcall(function()
-			session:release()
+			session:release(waitLimit)
 		end)
 		if not ok then
 			warn("[Satchel] release failed: " .. tostring(err))
@@ -283,7 +285,7 @@ end)
 game:BindToClose(function()
 	for userId, session in sessions do
 		sessions[userId] = nil
-		releaseSession(session)
+		releaseSession(session, Config.CloseTimeoutSeconds)
 	end
 	local deadline = os.clock() + Config.CloseTimeoutSeconds
 	while releasing > 0 and os.clock() < deadline do
