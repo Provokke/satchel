@@ -4,7 +4,7 @@
 
 Session-locked player data, stacking inventory, equip slots and all-or-nothing two-player trading for Roblox. It leaves out shops, crafting, item art and any purchase flow.
 
-![Licence](https://img.shields.io/badge/LICENSE-MIT-blue?style=for-the-badge)  ![Language](https://img.shields.io/badge/LUAU-00A2FF?style=for-the-badge&logo=roblox&logoColor=white)  ![Tests](https://img.shields.io/badge/TESTS-140-brightgreen?style=for-the-badge)
+![Licence](https://img.shields.io/badge/LICENSE-MIT-blue?style=for-the-badge)  ![Language](https://img.shields.io/badge/LUAU-00A2FF?style=for-the-badge&logo=roblox&logoColor=white)  ![Tests](https://img.shields.io/badge/TESTS-141-brightgreen?style=for-the-badge)
 
 Refer to [LICENSE](LICENSE) for the legal bits.
 
@@ -92,7 +92,7 @@ In Studio the server uses an in-memory store, so nothing is saved between sessio
 lune run tests/run
 ```
 
-140 tests, all passing:
+141 tests, all passing:
 
 - Rate limiter (4): a full bucket allows exactly its capacity, time refills it, it never overfills, and forgetting a key resets only that key.
 - Validate (10): integers, strings, unit vectors and set membership, including NaN, infinity, floats, wrong types and out-of-range values.
